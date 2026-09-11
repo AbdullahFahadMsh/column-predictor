@@ -1,0 +1,10 @@
+# Python virtual environment (never commit this)
+.venv/
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Pictures the program produces when it runs
+outputs/

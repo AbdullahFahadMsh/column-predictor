@@ -1,0 +1,5 @@
+# The only two libraries this proof-of-concept needs.
+# Install them with:  pip install -r requirements.txt
+
+ezdxf>=1.1        # reads and understands .dxf drawing files
+matplotlib>=3.5   # draws the plan + suggested columns as a picture
