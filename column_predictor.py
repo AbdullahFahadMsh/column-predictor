@@ -20,7 +20,8 @@
             +--> FUNCTION 2  read_wall_lines()      read the wall lines  [done: phase 2]
             +--> FUNCTION 3  find_grid_lines()      find the X/Y grid    [done: phase 3]
             |        (uses small HELPER A and HELPER B, defined just above it)
-            +--> FUNCTION 4  suggest_columns()      place the columns    (phase 4)
+            +--> FUNCTION 4  suggest_columns()      place the columns    [done: phase 4]
+            |        (uses HELPER D to check a wall is really at that spot)
             +--> FUNCTION 5  draw_result()          draw the picture     (phase 5)
             +--> FUNCTION 6  validate_columns()     (model goes here later)
  ---------------------------------------------------------------------
@@ -50,6 +51,9 @@ GRID_MERGE_FRACTION = 0.02   # wall lines whose position is within 2% of the
 GRID_KEEP_FRACTION  = 0.15   # a grid line is kept only if the walls sitting on
                              #   it add up to at least 15% of the busiest grid
                              #   line's wall length (this drops tiny stray jogs)
+COLUMN_ON_WALL_FRACTION = 0.03  # a grid crossing becomes a column only if a wall
+                                #   passes within 3% of the building size of it
+                                #   (so we never place a column in empty space)
 
 
 # =====================================================================
@@ -290,10 +294,67 @@ def _keep_strong_lines(merged_lines):
     return sorted(kept)
 
 
+# ---------------------------------------------------------------------
+#  HELPER D (used by FUNCTION 4) :  is there a wall at this spot?
+#  _distance_point_to_segment() measures the shortest distance from a
+#  point to one wall line. _point_is_on_a_wall() says True if ANY wall
+#  line passes within "tolerance" of the point.
+# ---------------------------------------------------------------------
+def _distance_point_to_segment(px, py, x1, y1, x2, y2):
+    seg_dx = x2 - x1
+    seg_dy = y2 - y1
+    seg_length_squared = seg_dx * seg_dx + seg_dy * seg_dy
+    if seg_length_squared == 0:
+        # The "segment" is really a single point.
+        return ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5
+    # How far along the line the nearest point is: 0 = start, 1 = end.
+    t = ((px - x1) * seg_dx + (py - y1) * seg_dy) / seg_length_squared
+    t = max(0.0, min(1.0, t))            # stay on the segment, not past its ends
+    nearest_x = x1 + t * seg_dx
+    nearest_y = y1 + t * seg_dy
+    return ((px - nearest_x) ** 2 + (py - nearest_y) ** 2) ** 0.5
+
+
+def _point_is_on_a_wall(px, py, wall_lines, tolerance):
+    for x1, y1, x2, y2 in wall_lines:
+        if _distance_point_to_segment(px, py, x1, y1, x2, y2) <= tolerance:
+            return True
+    return False
+
+
+# =====================================================================
+#  FUNCTION 4 of 6 :  suggest_columns()
+# ---------------------------------------------------------------------
+#  WHAT IT DOES : goes to every crossing of an X grid line and a Y grid
+#                 line and suggests a column there - BUT only if a wall
+#                 actually passes through that crossing. This keeps
+#                 columns on the structure and out of empty rooms.
+#  TAKES        : x_grid, y_grid (from FUNCTION 3) and wall_lines (F2).
+#  GIVES BACK   : a list of column points, e.g. [(x, y), (x, y), ...]
+#  CALLED BY    : run_pipeline()
+#  CALLS        : HELPER D (_point_is_on_a_wall)
+# =====================================================================
+def suggest_columns(x_grid, y_grid, wall_lines):
+    # Work out how close a wall must be, based on the building size.
+    all_x = [x for seg in wall_lines for x in (seg[0], seg[2])]
+    all_y = [y for seg in wall_lines for y in (seg[1], seg[3])]
+    width = max(all_x) - min(all_x)
+    height = max(all_y) - min(all_y)
+    building_size = min(width, height) or max(width, height)
+    tolerance = COLUMN_ON_WALL_FRACTION * building_size
+
+    columns = []
+    for x in x_grid:                 # for every vertical grid line...
+        for y in y_grid:             # ...and every horizontal grid line...
+            if _point_is_on_a_wall(x, y, wall_lines, tolerance):
+                columns.append((x, y))   # a wall is here: suggest a column
+    return columns
+
+
 # =====================================================================
 #  run_pipeline()  --  THE CONDUCTOR
 # ---------------------------------------------------------------------
-#  Calls the numbered steps in order. Right now it does STEPS 1, 2 and 3.
+#  Calls the numbered steps in order. Right now it does STEPS 1..4.
 # =====================================================================
 def run_pipeline(given_path=None):
     print("Column Predictor - proof of concept")
@@ -320,8 +381,12 @@ def run_pipeline(given_path=None):
     x_grid, y_grid = find_grid_lines(wall_lines)
     print("Vertical grid lines (X positions):", len(x_grid))
     print("Horizontal grid lines (Y positions):", len(y_grid))
-    print("   grid crossings (possible columns):", len(x_grid) * len(y_grid))
-    print("(Placing the columns and drawing them come in the next phases.)")
+    print("   grid crossings (possible column spots):", len(x_grid) * len(y_grid))
+
+    # STEP 4: keep only the crossings that actually sit on a wall.
+    columns = suggest_columns(x_grid, y_grid, wall_lines)
+    print("Columns suggested:", len(columns))
+    print("(Drawing the result comes in the next phase.)")
 
 
 # =====================================================================
