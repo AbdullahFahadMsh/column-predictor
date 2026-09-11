@@ -57,6 +57,30 @@ COLUMN_ON_WALL_FRACTION = 0.03  # a grid crossing becomes a column only if a wal
                                 #   (so we never place a column in empty space)
 
 
+# ---------------------------------------------------------------------
+#  HELPER (used by FUNCTION 1) :  _popup_is_safe_to_use()
+#  A pop-up needs a screen (Windows/macOS always have one; Linux needs
+#  the DISPLAY setting). On top of that, a few computers - notably some
+#  Macs - have a broken window toolkit (Tk) that CRASHES the whole
+#  program the instant it starts, a crash Python cannot catch. So we
+#  quietly test Tk in a THROWAWAY process first; if that process crashes,
+#  we know to skip the pop-up and ask for the path instead.
+# ---------------------------------------------------------------------
+def _popup_is_safe_to_use():
+    import subprocess
+    on_screen = (sys.platform.startswith("win") or sys.platform == "darwin"
+                 or bool(os.environ.get("DISPLAY")))
+    if not on_screen:
+        return False
+    test_code = "import tkinter; w = tkinter.Tk(); w.withdraw(); w.destroy()"
+    try:
+        result = subprocess.run([sys.executable, "-c", test_code],
+                                capture_output=True, timeout=15)
+        return result.returncode == 0     # 0 means Tk started and closed cleanly
+    except Exception:
+        return False
+
+
 # =====================================================================
 #  FUNCTION 1 of 6 :  choose_dxf_file()
 # ---------------------------------------------------------------------
@@ -70,7 +94,7 @@ COLUMN_ON_WALL_FRACTION = 0.03  # a grid crossing becomes a column only if a wal
 #                 (may be None if nothing was typed).
 #  GIVES BACK   : the full path to a .dxf file, as text (a string).
 #  CALLED BY    : run_pipeline()
-#  CALLS        : the tkinter file-dialog (only if a screen is available)
+#  CALLS        : HELPER _popup_is_safe_to_use(), then the tkinter file-dialog
 # =====================================================================
 def choose_dxf_file(given_path=None):
 
@@ -80,11 +104,11 @@ def choose_dxf_file(given_path=None):
         print("Using the file given on the command line:", given_path)
         return given_path
 
-    # -- Case B: try to open the graphical pop-up ("Open file") window.
-    #            This only works when the computer has a screen. We wrap
-    #            it in try/except so that, if there is no screen, the
-    #            program does not crash - it just moves on to Case C.
-    if os.environ.get("DISPLAY") or sys.platform.startswith("win") or sys.platform == "darwin":
+    # -- Case B: try the graphical pop-up ("Open file") window, but only
+    #            after the helper has confirmed the window toolkit is
+    #            healthy. That check is what stops the hard Tk crash seen
+    #            on some Macs from ever reaching us here.
+    if _popup_is_safe_to_use():
         try:
             import tkinter                      # Python's built-in windows toolkit
             from tkinter import filedialog
@@ -352,28 +376,48 @@ def suggest_columns(x_grid, y_grid, wall_lines):
     return columns
 
 
+# ---------------------------------------------------------------------
+#  HELPER (used by FUNCTION 5) :  _open_in_default_viewer()
+#  Opens the saved picture in the computer's normal image viewer
+#  (Preview on macOS, Photos on Windows, the default viewer on Linux).
+#  We do this instead of a matplotlib pop-up window, because pop-up
+#  windows rely on a window toolkit that can crash on some machines.
+#  Opening the file is only a bonus, so we never fail if it does not work.
+# ---------------------------------------------------------------------
+def _open_in_default_viewer(path):
+    import subprocess
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", path])
+        elif sys.platform.startswith("win"):
+            os.startfile(path)                       # provided by Windows
+        elif os.environ.get("DISPLAY"):
+            subprocess.run(["xdg-open", path])
+        # headless server: no viewer; the saved file is still there
+    except Exception:
+        pass
+
+
 # =====================================================================
 #  FUNCTION 5 of 6 :  draw_result()
 # ---------------------------------------------------------------------
 #  WHAT IT DOES : draws a picture of the plan - the walls in grey, the
 #                 grid as dashed blue lines, and each suggested column
-#                 as a red square - then SAVES it to a .png file. If the
-#                 computer has a screen it also opens a window to show it.
+#                 as a red square - then SAVES it to a .png file and
+#                 opens that picture in your normal image viewer.
 #  TAKES        : wall_lines, x_grid, y_grid, columns, and output_path
 #                 (where to save the picture).
-#  GIVES BACK   : nothing; it writes a picture file and maybe opens a window.
+#  GIVES BACK   : nothing; it writes a picture file and opens it for you.
 #  CALLED BY    : run_pipeline()
-#  CALLS        : matplotlib (the drawing library)
+#  CALLS        : matplotlib (drawing) + HELPER _open_in_default_viewer()
 # =====================================================================
 def draw_result(wall_lines, x_grid, y_grid, columns, output_path):
 
-    # Choose how matplotlib should work. With a screen we can SHOW a
-    # window; without one (a server over SSH) we can still SAVE a file.
+    # Always draw straight to a file using matplotlib's "Agg" engine.
+    # Agg never opens a window, so it can never crash on a broken window
+    # toolkit. We show the result afterwards by opening the saved file.
     import matplotlib
-    has_screen = (bool(os.environ.get("DISPLAY"))
-                  or sys.platform.startswith("win") or sys.platform == "darwin")
-    if not has_screen:
-        matplotlib.use("Agg")            # "save to a file only" mode
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(figsize=(9, 9))
@@ -407,14 +451,11 @@ def draw_result(wall_lines, x_grid, y_grid, columns, output_path):
 
     # SAVE the picture (this works on every computer).
     figure.savefig(output_path, dpi=130)
+    plt.close(figure)
     print("Saved a picture of the result to:", output_path)
 
-    # SHOW a window too, but only if the drawing backend can open one.
-    # (On a server, or when no window toolkit is installed, matplotlib
-    #  uses the file-only "Agg" backend, so we simply skip showing.)
-    if matplotlib.get_backend().lower() != "agg":
-        plt.show()
-    plt.close(figure)
+    # SHOW it by opening the saved file in the computer's image viewer.
+    _open_in_default_viewer(output_path)
 
 
 # =====================================================================

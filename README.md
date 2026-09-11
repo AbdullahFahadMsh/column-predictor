@@ -63,8 +63,19 @@ just pass the file on the command line instead:
 python column_predictor.py samples/sample_plan.dxf
 ```
 
-Either way it prints what it found and saves a picture of the result into
-`outputs/`.
+Either way it prints what it found, saves a picture of the result into
+`outputs/`, and opens that picture in your normal image viewer.
+
+**macOS note:** some Macs ship a broken Tk, so the *pop-up* file chooser may be
+unavailable. The program detects this automatically and just asks you to pass
+the file instead:
+
+```bash
+python column_predictor.py samples/sample_plan.dxf
+```
+
+To get the pop-up itself working, use a recent Python from python.org (3.11+),
+which bundles a fixed Tk.
 
 ---
 
