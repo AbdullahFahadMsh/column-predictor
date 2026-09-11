@@ -17,18 +17,24 @@
      +--> run_pipeline(path)   <- the "conductor": calls 1..6 in order
             |
             +--> FUNCTION 1  choose_dxf_file()      pick the .dxf file   [done: phase 1]
-            +--> FUNCTION 2  read_wall_lines()      read the wall lines  (phase 2)
+            +--> FUNCTION 2  read_wall_lines()      read the wall lines  [done: phase 2]
             +--> FUNCTION 3  find_grid_lines()      find the X/Y grid    (phase 3)
             +--> FUNCTION 4  suggest_columns()      place the columns    (phase 4)
             +--> FUNCTION 5  draw_result()          draw the picture     (phase 5)
             +--> FUNCTION 6  validate_columns()     (model goes here later)
  ---------------------------------------------------------------------
+
+ A "wall line" in this program is just four numbers: (x1, y1, x2, y2) -
+ the start point and the end point of one straight line.
 =======================================================================
 """
 
 # Standard-library tools that come with Python (no install needed).
 import os      # to check whether a file exists and read the DISPLAY setting
 import sys     # to read a file path typed after the program name
+
+# Outside library (installed with: pip install -r requirements.txt).
+import ezdxf   # reads and understands .dxf drawing files
 
 
 # =====================================================================
@@ -90,10 +96,75 @@ def choose_dxf_file(given_path=None):
 
 
 # =====================================================================
+#  FUNCTION 2 of 6 :  read_wall_lines()
+# ---------------------------------------------------------------------
+#  WHAT IT DOES : opens the .dxf drawing and pulls out every straight
+#                 wall line as four numbers (x1, y1, x2, y2).
+#                 A drawing stores walls in two common shapes:
+#                   * LINE        - one straight segment
+#                   * LWPOLYLINE  - a chain of points (many segments)
+#                 We turn both into a simple list of straight segments.
+#  TAKES        : dxf_path - the path to the .dxf file.
+#  GIVES BACK   : a list of segments, e.g. [(x1,y1,x2,y2), (x1,y1,x2,y2), ...]
+#  CALLED BY    : run_pipeline()
+#  CALLS        : ezdxf (to open and read the drawing)
+# =====================================================================
+def read_wall_lines(dxf_path):
+
+    # Open the drawing. Some files are slightly broken; if the normal
+    # open fails, ezdxf's "recover" mode fixes most problems for us.
+    try:
+        drawing = ezdxf.readfile(dxf_path)
+    except Exception:
+        from ezdxf import recover
+        drawing, _ = recover.readfile(dxf_path)
+
+    # "modelspace" is the main drawing area (where the plan lives).
+    model_space = drawing.modelspace()
+
+    wall_lines = []   # we will fill this list with (x1, y1, x2, y2) tuples
+
+    # Look at every drawing object and keep the straight pieces.
+    for entity in model_space:
+        kind = entity.dxftype()
+
+        if kind == "LINE":
+            # One straight segment: it has a start point and an end point.
+            start = entity.dxf.start
+            end = entity.dxf.end
+            wall_lines.append((start.x, start.y, end.x, end.y))
+
+        elif kind == "LWPOLYLINE":
+            # A chain of points. Each neighbouring pair of points is one
+            # straight segment. get_points() gives (x, y, ...) for each.
+            points = [(p[0], p[1]) for p in entity.get_points()]
+            if entity.closed and len(points) > 1:
+                points.append(points[0])   # closed shape: join last -> first
+            for i in range(len(points) - 1):
+                x1, y1 = points[i]
+                x2, y2 = points[i + 1]
+                wall_lines.append((x1, y1, x2, y2))
+
+        elif kind == "POLYLINE":
+            # Older style of chained points; treated the same way.
+            points = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+            if entity.is_closed and len(points) > 1:
+                points.append(points[0])
+            for i in range(len(points) - 1):
+                x1, y1 = points[i]
+                x2, y2 = points[i + 1]
+                wall_lines.append((x1, y1, x2, y2))
+
+        # (Other drawing objects - text, arcs, hatching - are ignored
+        #  on purpose. Walls in these plans are LINEs and LWPOLYLINEs.)
+
+    return wall_lines
+
+
+# =====================================================================
 #  run_pipeline()  --  THE CONDUCTOR
 # ---------------------------------------------------------------------
-#  Calls the numbered steps in order. Right now it can do STEP 1.
-#  Later phases add steps 2..6 right below the last one.
+#  Calls the numbered steps in order. Right now it does STEPS 1 and 2.
 # =====================================================================
 def run_pipeline(given_path=None):
     print("Column Predictor - proof of concept")
@@ -107,10 +178,15 @@ def run_pipeline(given_path=None):
     if not os.path.exists(dxf_path):
         print("That file does not exist:", dxf_path)
         return
+    print("File:", dxf_path)
 
-    print("OK - the file we will analyse is:")
-    print("   ", dxf_path)
-    print("(Reading and analysing it comes in the next phases.)")
+    # STEP 2: read the wall lines out of the drawing.
+    wall_lines = read_wall_lines(dxf_path)
+    print("Wall lines found:", len(wall_lines))
+    if not wall_lines:
+        print("No straight wall lines in this drawing - stopping.")
+        return
+    print("(Finding the grid and placing columns come in the next phases.)")
 
 
 # =====================================================================
