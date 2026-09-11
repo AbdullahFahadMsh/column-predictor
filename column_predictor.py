@@ -22,7 +22,7 @@
             |        (uses small HELPER A and HELPER B, defined just above it)
             +--> FUNCTION 4  suggest_columns()      place the columns    [done: phase 4]
             |        (uses HELPER D to check a wall is really at that spot)
-            +--> FUNCTION 5  draw_result()          draw the picture     (phase 5)
+            +--> FUNCTION 5  draw_result()          draw the picture     [done: phase 5]
             +--> FUNCTION 6  validate_columns()     (model goes here later)
  ---------------------------------------------------------------------
 
@@ -352,9 +352,74 @@ def suggest_columns(x_grid, y_grid, wall_lines):
 
 
 # =====================================================================
+#  FUNCTION 5 of 6 :  draw_result()
+# ---------------------------------------------------------------------
+#  WHAT IT DOES : draws a picture of the plan - the walls in grey, the
+#                 grid as dashed blue lines, and each suggested column
+#                 as a red square - then SAVES it to a .png file. If the
+#                 computer has a screen it also opens a window to show it.
+#  TAKES        : wall_lines, x_grid, y_grid, columns, and output_path
+#                 (where to save the picture).
+#  GIVES BACK   : nothing; it writes a picture file and maybe opens a window.
+#  CALLED BY    : run_pipeline()
+#  CALLS        : matplotlib (the drawing library)
+# =====================================================================
+def draw_result(wall_lines, x_grid, y_grid, columns, output_path):
+
+    # Choose how matplotlib should work. With a screen we can SHOW a
+    # window; without one (a server over SSH) we can still SAVE a file.
+    import matplotlib
+    has_screen = (bool(os.environ.get("DISPLAY"))
+                  or sys.platform.startswith("win") or sys.platform == "darwin")
+    if not has_screen:
+        matplotlib.use("Agg")            # "save to a file only" mode
+    import matplotlib.pyplot as plt
+
+    figure, axes = plt.subplots(figsize=(9, 9))
+
+    # 1) the walls: plain grey lines.
+    for x1, y1, x2, y2 in wall_lines:
+        axes.plot([x1, x2], [y1, y2], color="0.45", linewidth=1.0)
+
+    # 2) the grid: thin dashed blue lines spanning the whole drawing.
+    all_x = [x for seg in wall_lines for x in (seg[0], seg[2])]
+    all_y = [y for seg in wall_lines for y in (seg[1], seg[3])]
+    for grid_x in x_grid:
+        axes.plot([grid_x, grid_x], [min(all_y), max(all_y)],
+                  color="#2f6db5", linewidth=0.8, linestyle="--", alpha=0.6)
+    for grid_y in y_grid:
+        axes.plot([min(all_x), max(all_x)], [grid_y, grid_y],
+                  color="#2f6db5", linewidth=0.8, linestyle="--", alpha=0.6)
+
+    # 3) the suggested columns: red squares on top of everything.
+    if columns:
+        column_x = [point[0] for point in columns]
+        column_y = [point[1] for point in columns]
+        axes.scatter(column_x, column_y, s=90, marker="s",
+                     color="#c14545", zorder=5, label="suggested column")
+
+    axes.set_aspect("equal")             # keep the plan's real proportions
+    axes.set_title("Column Predictor  -  %d suggested columns" % len(columns))
+    if columns:
+        axes.legend(loc="upper right")
+    figure.tight_layout()
+
+    # SAVE the picture (this works on every computer).
+    figure.savefig(output_path, dpi=130)
+    print("Saved a picture of the result to:", output_path)
+
+    # SHOW a window too, but only if the drawing backend can open one.
+    # (On a server, or when no window toolkit is installed, matplotlib
+    #  uses the file-only "Agg" backend, so we simply skip showing.)
+    if matplotlib.get_backend().lower() != "agg":
+        plt.show()
+    plt.close(figure)
+
+
+# =====================================================================
 #  run_pipeline()  --  THE CONDUCTOR
 # ---------------------------------------------------------------------
-#  Calls the numbered steps in order. Right now it does STEPS 1..4.
+#  Calls the numbered steps in order. Right now it does STEPS 1..5.
 # =====================================================================
 def run_pipeline(given_path=None):
     print("Column Predictor - proof of concept")
@@ -386,7 +451,13 @@ def run_pipeline(given_path=None):
     # STEP 4: keep only the crossings that actually sit on a wall.
     columns = suggest_columns(x_grid, y_grid, wall_lines)
     print("Columns suggested:", len(columns))
-    print("(Drawing the result comes in the next phase.)")
+
+    # STEP 5: draw the plan with the suggested columns and save a picture.
+    os.makedirs("outputs", exist_ok=True)
+    file_stem = os.path.splitext(os.path.basename(dxf_path))[0]
+    output_path = os.path.join("outputs", file_stem + "_columns.png")
+    draw_result(wall_lines, x_grid, y_grid, columns, output_path)
+    print("Done.")
 
 
 # =====================================================================
