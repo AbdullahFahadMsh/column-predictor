@@ -23,7 +23,8 @@
             +--> FUNCTION 4  suggest_columns()      place the columns    [done: phase 4]
             |        (uses HELPER D to check a wall is really at that spot)
             +--> FUNCTION 5  draw_result()          draw the picture     [done: phase 5]
-            +--> FUNCTION 6  validate_columns()     (model goes here later)
+            +--> FUNCTION 6  validate_columns()     model seam           [done: phase 6]
+                     (empty for now: the future model plugs in HERE)
  ---------------------------------------------------------------------
 
  A "wall line" in this program is just four numbers: (x1, y1, x2, y2) -
@@ -417,9 +418,37 @@ def draw_result(wall_lines, x_grid, y_grid, columns, output_path):
 
 
 # =====================================================================
+#  FUNCTION 6 of 6 :  validate_columns()   --   THE MODEL SEAM
+# ---------------------------------------------------------------------
+#  WHAT IT DOES : this is the ONE place where the future machine-learning
+#                 model will plug in. The model will look at each column
+#                 the code suggested and mark it APPROVED or REJECTED.
+#                 The model does not exist yet, so for now we approve
+#                 every suggestion unchanged - that keeps the pipeline
+#                 complete from start to finish today.
+#  TAKES        : columns - the suggested list from FUNCTION 4.
+#  GIVES BACK   : the approved columns (right now: all of them).
+#  CALLED BY    : run_pipeline()
+#  CALLS        : nothing yet (the model will be called here later)
+# ---------------------------------------------------------------------
+#  LATER, when the model exists, this step will run BEFORE FUNCTION 5
+#  so the picture can colour approved vs rejected columns differently.
+# =====================================================================
+def validate_columns(columns):
+    approved = []
+    for (x, y) in columns:
+        # LATER, replace this line with a real check, for example:
+        #     if model.approves(x, y, surroundings): approved.append((x, y))
+        approved.append((x, y))     # for now: keep every suggestion
+    print("Model check: not built yet - approving all",
+          len(approved), "suggestions for now.")
+    return approved
+
+
+# =====================================================================
 #  run_pipeline()  --  THE CONDUCTOR
 # ---------------------------------------------------------------------
-#  Calls the numbered steps in order. Right now it does STEPS 1..5.
+#  Calls the numbered steps in order - the full STEP 1..6 pipeline.
 # =====================================================================
 def run_pipeline(given_path=None):
     print("Column Predictor - proof of concept")
@@ -457,7 +486,15 @@ def run_pipeline(given_path=None):
     file_stem = os.path.splitext(os.path.basename(dxf_path))[0]
     output_path = os.path.join("outputs", file_stem + "_columns.png")
     draw_result(wall_lines, x_grid, y_grid, columns, output_path)
-    print("Done.")
+
+    # STEP 6: the MODEL SEAM (a placeholder today).
+    #   It currently approves every suggestion. When the model is built,
+    #   this step will move ahead of STEP 5 so the drawing can show
+    #   approved and rejected columns in different colours.
+    approved_columns = validate_columns(columns)
+
+    print("Done.  %d columns suggested, %d approved (model not built yet)."
+          % (len(columns), len(approved_columns)))
 
 
 # =====================================================================
