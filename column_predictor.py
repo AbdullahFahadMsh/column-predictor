@@ -18,7 +18,8 @@
             |
             +--> FUNCTION 1  choose_dxf_file()      pick the .dxf file   [done: phase 1]
             +--> FUNCTION 2  read_wall_lines()      read the wall lines  [done: phase 2]
-            +--> FUNCTION 3  find_grid_lines()      find the X/Y grid    (phase 3)
+            +--> FUNCTION 3  find_grid_lines()      find the X/Y grid    [done: phase 3]
+            |        (uses small HELPER A and HELPER B, defined just above it)
             +--> FUNCTION 4  suggest_columns()      place the columns    (phase 4)
             +--> FUNCTION 5  draw_result()          draw the picture     (phase 5)
             +--> FUNCTION 6  validate_columns()     (model goes here later)
@@ -35,6 +36,20 @@ import sys     # to read a file path typed after the program name
 
 # Outside library (installed with: pip install -r requirements.txt).
 import ezdxf   # reads and understands .dxf drawing files
+
+
+# ---------------------------------------------------------------------
+#  SETTINGS you can tweak. All are simple ratios, so they work no matter
+#  whether the drawing is in millimetres, metres or feet.
+# ---------------------------------------------------------------------
+NEAR_AXIS_TOLERANCE = 0.02   # how straight a line must be to count as
+                             #   perfectly vertical or horizontal (2% slope)
+GRID_MERGE_FRACTION = 0.02   # wall lines whose position is within 2% of the
+                             #   building size are treated as ONE grid line
+                             #   (this merges the two faces of a wall together)
+GRID_KEEP_FRACTION  = 0.15   # a grid line is kept only if the walls sitting on
+                             #   it add up to at least 15% of the busiest grid
+                             #   line's wall length (this drops tiny stray jogs)
 
 
 # =====================================================================
@@ -161,10 +176,124 @@ def read_wall_lines(dxf_path):
     return wall_lines
 
 
+# ---------------------------------------------------------------------
+#  HELPER A (used by FUNCTION 3) :  _describe_line()
+#  Looks at one wall line and says whether it is vertical, horizontal,
+#  or slanted ("other"). It also returns the line's length and the one
+#  coordinate that stays constant (the X for a vertical line, the Y for
+#  a horizontal line) - that constant number is where a grid line sits.
+# ---------------------------------------------------------------------
+def _describe_line(segment):
+    x1, y1, x2, y2 = segment
+    width = abs(x2 - x1)
+    height = abs(y2 - y1)
+    length = (width * width + height * height) ** 0.5
+    if length == 0:
+        return ("other", 0.0, None)          # a dot, not a line
+    if height <= NEAR_AXIS_TOLERANCE * length:
+        return ("horizontal", length, (y1 + y2) / 2.0)   # sits at this Y
+    if width <= NEAR_AXIS_TOLERANCE * length:
+        return ("vertical", length, (x1 + x2) / 2.0)     # sits at this X
+    return ("other", length, None)
+
+
+# ---------------------------------------------------------------------
+#  HELPER B (used by FUNCTION 3) :  _cluster_positions()
+#  Takes many (position, weight) pairs that are close together and
+#  merges them into a few grid lines. Positions within merge_tolerance
+#  of each other become one line, placed at their weight-averaged spot.
+#  ("weight" is the wall length: longer walls pull the line towards them.)
+# ---------------------------------------------------------------------
+def _cluster_positions(position_weight_pairs, merge_tolerance):
+    if not position_weight_pairs:
+        return []                                  # nothing to merge
+
+    ordered = sorted(position_weight_pairs)        # sort by position (left->right)
+    clusters = [[ordered[0]]]                      # start the first group
+
+    for position, weight in ordered[1:]:
+        last_position = clusters[-1][-1][0]
+        if position - last_position <= merge_tolerance:
+            clusters[-1].append((position, weight))   # close enough: same group
+        else:
+            clusters.append([(position, weight)])     # far away: new group
+
+    # Turn each group into one (average_position, total_weight) result.
+    merged = []
+    for group in clusters:
+        total_weight = sum(weight for _, weight in group)
+        if total_weight > 0:
+            average = sum(pos * weight for pos, weight in group) / total_weight
+        else:
+            average = sum(pos for pos, _ in group) / len(group)
+        merged.append((average, total_weight))
+    return merged
+
+
+# =====================================================================
+#  FUNCTION 3 of 6 :  find_grid_lines()
+# ---------------------------------------------------------------------
+#  WHAT IT DOES : works out the building's structural grid - the small
+#                 set of vertical lines (X positions) and horizontal
+#                 lines (Y positions) that the walls line up on.
+#                 Idea: every vertical wall votes for an X grid line;
+#                 every horizontal wall votes for a Y grid line; nearby
+#                 votes are merged; weak lines are dropped.
+#  TAKES        : wall_lines - the list from FUNCTION 2.
+#  GIVES BACK   : two sorted lists  ->  (x_grid, y_grid)
+#  CALLED BY    : run_pipeline()
+#  CALLS        : HELPER A (_describe_line), HELPER B (_cluster_positions)
+# =====================================================================
+def find_grid_lines(wall_lines):
+
+    # 1) How big is the drawing? We use its size to decide how close two
+    #    lines must be before we treat them as the same grid line.
+    all_x = [x for seg in wall_lines for x in (seg[0], seg[2])]
+    all_y = [y for seg in wall_lines for y in (seg[1], seg[3])]
+    width = max(all_x) - min(all_x)
+    height = max(all_y) - min(all_y)
+    building_size = min(width, height) or max(width, height)
+    merge_tolerance = GRID_MERGE_FRACTION * building_size
+
+    # 2) Every vertical wall votes for an X line; every horizontal wall
+    #    votes for a Y line. The vote's weight is the wall's length.
+    vertical_votes = []      # list of (x_position, length)
+    horizontal_votes = []    # list of (y_position, length)
+    for segment in wall_lines:
+        orientation, length, position = _describe_line(segment)
+        if orientation == "vertical":
+            vertical_votes.append((position, length))
+        elif orientation == "horizontal":
+            horizontal_votes.append((position, length))
+
+    # 3) Merge nearby votes into grid lines.
+    x_lines = _cluster_positions(vertical_votes, merge_tolerance)
+    y_lines = _cluster_positions(horizontal_votes, merge_tolerance)
+
+    # 4) Keep only the strong grid lines (drop tiny stray ones).
+    x_grid = _keep_strong_lines(x_lines)
+    y_grid = _keep_strong_lines(y_lines)
+    return x_grid, y_grid
+
+
+# ---------------------------------------------------------------------
+#  HELPER C (used by FUNCTION 3) :  _keep_strong_lines()
+#  From the merged lines, keep only those carrying a fair share of wall
+#  length compared with the busiest one. Returns their positions, sorted.
+# ---------------------------------------------------------------------
+def _keep_strong_lines(merged_lines):
+    if not merged_lines:
+        return []
+    strongest_weight = max(weight for _, weight in merged_lines)
+    kept = [position for position, weight in merged_lines
+            if weight >= GRID_KEEP_FRACTION * strongest_weight]
+    return sorted(kept)
+
+
 # =====================================================================
 #  run_pipeline()  --  THE CONDUCTOR
 # ---------------------------------------------------------------------
-#  Calls the numbered steps in order. Right now it does STEPS 1 and 2.
+#  Calls the numbered steps in order. Right now it does STEPS 1, 2 and 3.
 # =====================================================================
 def run_pipeline(given_path=None):
     print("Column Predictor - proof of concept")
@@ -186,7 +315,13 @@ def run_pipeline(given_path=None):
     if not wall_lines:
         print("No straight wall lines in this drawing - stopping.")
         return
-    print("(Finding the grid and placing columns come in the next phases.)")
+
+    # STEP 3: work out the structural grid.
+    x_grid, y_grid = find_grid_lines(wall_lines)
+    print("Vertical grid lines (X positions):", len(x_grid))
+    print("Horizontal grid lines (Y positions):", len(y_grid))
+    print("   grid crossings (possible columns):", len(x_grid) * len(y_grid))
+    print("(Placing the columns and drawing them come in the next phases.)")
 
 
 # =====================================================================
